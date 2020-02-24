@@ -1,0 +1,29 @@
+# Code created by Zephiles
+
+# A pointer is passed into this code, so this code preserves that value
+
+# Set global function/variable locations
+.set g_dComIfG_gameInfo,0x80400300
+.set CURRENT_FILE_INDEX,(g_dComIfG_gameInfo + 0xF18)
+.set g_mDoMemCd_control,0x803E5080
+
+# Get the index for the file loaded
+lis r4,CURRENT_FILE_INDEX@ha
+lbz r4,CURRENT_FILE_INDEX@l(r4)
+
+# Adjust the index to be in multiples of 0xA94 bytes
+mulli r4,r4,0xA94
+
+# Add the offset to the main function
+addi r4,r4,0x208
+
+# Get the address for g_mDoMemCd_control
+lis r5,g_mDoMemCd_control@h
+ori r5,r5,g_mDoMemCd_control@l
+
+# Get the start of the main function in the current file
+add r12,r5,r4
+
+# Jump to the main function
+mtctr r12
+bctr
