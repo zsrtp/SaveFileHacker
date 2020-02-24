@@ -1,5 +1,6 @@
 ## Credits
 * **PistonMiner** for creating the TTYD restarting loader stub, which has been ported to this project.
+* **Zephiles** for porting the TTYD restarting loader stub to Twilight Princess.
 * **magcius (aka Jasper)** for creating the TTYD save file hacker, which most of this repo's code is based off of. (GitHub repo for this can be found [here](https://github.com/magcius/TTYDSaveHacker))
 
 ## Overview
