@@ -1,5 +1,6 @@
 ## Credits
-* **magcius (aka Jasper)** for creating the TTYD save file hacker, which most of this repo's code is based off of. (GitHub repo for this can be found [here](https://github.com/magcius/TTYDSaveHacker).)
+* **PistonMiner** for creating the TTYD restarting loader stub, which has been ported to this project.
+* **magcius (aka Jasper)** for creating the TTYD save file hacker, which most of this repo's code is based off of. (GitHub repo for this can be found [here](https://github.com/magcius/TTYDSaveHacker))
 
 ## Overview
 This is a simple webpage for hacking a The Legend of Zelda: Twilight Princess GCI save file to load a REL file from memory card slot A.
