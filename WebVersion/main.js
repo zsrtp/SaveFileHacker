@@ -68,7 +68,7 @@ function patch(view, versionNumber, fileNumber) {
         writeBytes(view.buffer, offsetFile1 + offset, value);
     }
     // Write the new file name (Link's name).
-    var newFileName = 'REL Loader v' + versionNumber + '\0';
+    var newFileName = 'REL Loader v${versionNumber}\0';
     patchFilesBytes(0x1B4, makeStrBytes(newFileName));
     // Overwrite the next stage string with a bunch of filler 3s.
     patchFilesU32(0x58, 0x33333333);
