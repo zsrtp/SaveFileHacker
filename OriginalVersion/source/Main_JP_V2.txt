@@ -1,0 +1,551 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2020 Linus S. (aka PistonMiner)
+
+# Modifications made by Zephiles
+
+# Set global function/variable/offset locations/values
+.set LOADER_SIZE,(__end - __start)
+.set LOADER_ARENA_LOCATION,0x80B00000
+.set LOADER_LOWMEM_LOCATION,0x80004D18
+
+.set SAVE_REGION_START_OFFSET,-0x6EF8
+.set SAVE_REGION_END_OFFSET,-0x6EF4
+.set mAudioMgrPtr_OFFSET,-0x7218
+.set g_mDoAud_audioHeap_OFFSET,-0x79C4
+
+.set PAYLOAD_FIRST_HOOK_LOCATION,0x8033D64C
+.set PAYLOAD_SECOND_HOOK_LOCATION,0x8000BF28
+.set PAYLOAD_THIRD_HOOK_LOCATION,0x8000BF40
+.set PAYLOAD_FOURTH_HOOK_LOCATION,0x800063F4
+
+.set mDoRst_reset,0x80015614
+.set __OSReboot,0x80341A6C
+.set resetProcess,0x802CFE10
+.set Run_main,0x8033F0A4
+.set Run_restart,0x81303BB4
+
+.set memmove,0x803685CC
+.set DCFlushRange,0x8033DA48
+.set ICInvalidateRange,0x8033DB2C
+
+.set MemCardWorkArea0,0x803DB080
+.set memset,0x80003458
+.set OSLinkFixed,0x803409D0
+.set OSUnlink,0x80340C44
+.set CARDInit,0x80355F64
+.set CARDProbeEx,0x80358EE8
+.set CARDMount,0x80359790
+.set CARDOpen,0x8035A434
+.set CARDRead,0x8035AD68
+.set CARDClose,0x8035A550
+.set CARDUnmount,0x80359874
+
+__start:
+# Hook __OSReboot
+lis r3,__OSReboot@h
+ori r3,r3,__OSReboot@l
+bl main_pic
+
+main_pic:
+mflr r4
+addi r4,r4,(__OSReboot_hook - main_pic)
+bl writeBranch
+
+# Begin reset
+# Stop the audio
+lbz r3,-0x79C8(r13)
+cmplwi r3,0
+beq- call_mDoRst_reset
+
+lwz r3,mAudioMgrPtr_OFFSET(r13)
+li r4,5
+li r5,1
+lis r12,resetProcess@h
+ori r12,r12,resetProcess@l
+mtlr r12
+blrl
+
+# Call mDoRst_reset without returning
+call_mDoRst_reset:
+li r3,0
+lis r4,0x8000
+li r5,0
+lis r12,mDoRst_reset@h
+ori r12,r12,mDoRst_reset@l
+mtctr r12
+bctr
+
+# Runs out of initial location. Relocates to arena location, sets saved region
+# and patches Run in game binary.
+__OSReboot_hook:
+stwu sp,-0x20(sp)
+mflr r0
+stw r0,0x24(sp)
+stmw r29,0x8(sp)
+
+# Save arguments for original function
+mr r30,r3
+mr r31,r4
+
+# Initialize static values used for addresses
+lis r29,LOADER_ARENA_LOCATION@h
+
+# Relocate into arena memory
+mr r3,r29 # LOADER_ARENA_LOCATION
+bl __OSReboot_hook_pic
+
+__OSReboot_hook_pic:
+mflr r4
+addi r4,r4,(__start - __OSReboot_hook_pic)
+li r5,LOADER_SIZE
+lis r12,memmove@h
+ori r12,r12,memmove@l
+mtlr r12
+blrl
+
+mr r3,r29 # LOADER_ARENA_LOCATION
+li r4,LOADER_SIZE
+bl makeCodeChangesVisible
+
+# Set the saved region start and end
+stw r29,SAVE_REGION_START_OFFSET(r13)
+addi r3,r29,LOADER_SIZE
+stw r3,SAVE_REGION_END_OFFSET(r13)
+
+# Set up Run hook in main binary
+lis r3,Run_main@h
+ori r3,r3,Run_main@l
+ori r4,r29,(LOADER_ARENA_LOCATION + (Run_main_hook - __start))@l
+bl writeBranch
+
+# Back into __OSReboot
+lis r12,__OSReboot@h
+ori r12,r12,(__OSReboot + 4)@l
+mtctr r12
+
+# Restore arguments for original function
+mr r3,r30
+mr r4,r31
+
+lmw r29,0x8(sp)
+lwz r0,0x24(sp)
+mtlr r0
+addi sp,sp,0x20
+bctr
+
+# Runs out of arena location. Called when restart binary is about to be
+# executed. Patch restart binary.
+Run_main_hook:
+# This is just before loading a new DOL which will reset everything, so we
+# don't need to worry about preserving register contents
+
+# Save entrypoint
+mr r31,r3
+
+# Set up Run hook in restart DOL
+lis r3,Run_restart@h
+ori r3,r3, Run_restart@l
+lis r4,(LOADER_ARENA_LOCATION + (Run_restart_hook - __start))@h
+ori r4,r4,(LOADER_ARENA_LOCATION + (Run_restart_hook - __start))@l
+bl writeBranch
+
+# Restore entrypoint
+mr r3,r31
+
+# Back into Run
+b ((Run_main + 4) - LOADER_ARENA_LOCATION + __start)
+
+# Runs out of arena location. Called when game binary is about to be executed.
+# Relocates to low memory and patches reloaded game DOL.
+Run_restart_hook:
+# This is just before loading a new DOL which will reset everything, so we
+# don't need to worry about preserving register contents
+
+# Save entrypoint
+mr r31,r3
+
+# Relocate to low memory
+lis r30,LOADER_LOWMEM_LOCATION@h
+ori r3,r30,LOADER_LOWMEM_LOCATION@l
+lis r4,LOADER_ARENA_LOCATION@h
+li r5,LOADER_SIZE
+bl (memmove - LOADER_ARENA_LOCATION + __start)
+
+ori r3,r30,LOADER_LOWMEM_LOCATION@l
+li r4,LOADER_SIZE
+bl makeCodeChangesVisible
+
+# Place first hook for payload
+lis r3,PAYLOAD_FIRST_HOOK_LOCATION@h
+ori r3,r3,PAYLOAD_FIRST_HOOK_LOCATION@l
+ori r4,r30,(LOADER_LOWMEM_LOCATION + (gPayloadFirstHook - __start))@l
+bl writeBranch
+
+# Place second hook for payload
+lis r3,PAYLOAD_SECOND_HOOK_LOCATION@h
+ori r3,r3,PAYLOAD_SECOND_HOOK_LOCATION@l
+ori r4,r30,(LOADER_LOWMEM_LOCATION + (gPayloadSecondHook - __start))@l
+bl writeBranch
+
+# Place third hook for payload
+lis r3,PAYLOAD_THIRD_HOOK_LOCATION@h
+ori r3,r3,PAYLOAD_THIRD_HOOK_LOCATION@l
+ori r4,r30,(LOADER_LOWMEM_LOCATION + (gPayloadThirdHook - __start))@l
+bl writeBranch
+
+# Place fourth hook for payload
+lis r3,PAYLOAD_FOURTH_HOOK_LOCATION@h
+ori r3,r3,PAYLOAD_FOURTH_HOOK_LOCATION@l
+ori r4,r30,(LOADER_LOWMEM_LOCATION + (gPayloadFourthHook - __start))@l
+bl writeBranch
+
+# Place restart hook
+lis r3,__OSReboot@h
+ori r3,r3,__OSReboot@l
+lis r4,(LOADER_LOWMEM_LOCATION + (__OSReboot_hook - __start))@h
+ori r4,r4,(LOADER_LOWMEM_LOCATION + (__OSReboot_hook - __start))@l
+bl writeBranch
+
+# Restore entrypoint
+mr r3,r31
+
+# Back into Run
+b ((Run_restart + 4) - LOADER_ARENA_LOCATION + __start)
+
+writeBranch:
+# Write instruction
+subf r4,r3,r4
+rlwinm r4,r4,0,6,29
+lis r5,0x4800
+or r5,r5,r4
+stw r5,0(r3)
+
+# Make visible, tailcall
+li r4,4
+
+makeCodeChangesVisible:
+stwu sp,-0x20(sp)
+mflr r0
+stw r0,0x24(sp)
+stmw r29,0x8(sp)
+
+mr r31,r3 # address
+mr r30,r4 # size
+
+lis r29,DCFlushRange@h
+ori r5,r29,DCFlushRange@l
+mtlr r5
+blrl
+
+ori r3,r29,ICInvalidateRange@l
+mtlr r3
+mr r3,r31 # address
+mr r4,r30 # size
+blrl
+
+lmw r29,0x8(sp)
+lwz r0,0x24(sp)
+mtlr r0
+addi sp,sp,0x20
+blr
+
+gPayloadFirstHook:
+# Original REL Loader code with some modifications
+# Original code created by PistonMiner and Zephiles for Paper Mario: The Thousand-Year Door
+# Code ported to Twilight Princess by Zephiles
+
+# Push stack
+stwu sp,-0x50(sp)
+mflr r0
+stw r0,0x54(sp)
+stmw r23,0x8(sp)
+
+# Backup important register values
+mr r31,r3
+mr r30,r4
+mr r29,r5
+
+# Initialize static values used for addresses
+lis r28,0x8000
+
+# Clear the global address values used for other hooks, in case the REL fails to be linked
+li r0,0
+stw r0,0x42D8(r28) # REL and BSS Area combined sizes
+stw r0,0x42DC(r28) # Pointer to the BSS Area
+stw r0,0x42E0(r28) # Pointer to the Module
+
+# CARDInit needs to be called before we can use CARD functions
+# This code runs before the game normally calls CARDInit
+# CARDInit checks to see if it has been called already, so it doesn't need to be adjusted afterwards
+bl (CARDInit - LOADER_LOWMEM_LOCATION + __start)
+
+# Check if a Memory Card is present
+# To avoid an infinite loop, only check for a memory card a set amount of times
+lis r27,0x000F
+ori r27,r27,0x4240 # Check 1,000,000 times
+
+checkForMemoryCardLoop:
+li r3,0 # Memory Card Slot A
+li r4,0 # Pointer to the Memory Size (Not needed, so NULL)
+li r5,0 # Pointer to the Sector Size (Not needed, so NULL)
+bl (CARDProbeEx - LOADER_LOWMEM_LOCATION + __start)
+cmpwi r3,-1 # CARD_RESULT_BUSY
+bne- exitCheckForMemoryCardLoop
+
+# Exit if the limit has been reached
+subic. r27,r27,1
+bgt+ checkForMemoryCardLoop
+
+exitCheckForMemoryCardLoop:
+cmpwi r3,0 # Check if something went wrong
+bne- exitFirstHook
+
+# Mount the Memory Card
+li r3,0 # Memory Card Slot A
+lis r4,MemCardWorkArea0@h
+ori r4,r4,MemCardWorkArea0@l
+li r5,0 # Detach Callback function (Want to avoid using, so NULL)
+bl (CARDMount - LOADER_LOWMEM_LOCATION + __start)
+cmpwi r3,0 # Check if something went wrong
+bne- exitFirstHook
+
+# Set up CARDFileInfo on the stack
+addi r27,sp,0x30
+
+# Open the file
+li r3,0 # Memory Card Slot A
+ori r4,r28,(LOADER_LOWMEM_LOCATION + internalFilenameString)@l
+mr r5,r27 # Pointer to CARDFileInfo
+bl (CARDOpen - LOADER_LOWMEM_LOCATION + __start)
+cmpwi r3,0 # Check if something went wrong
+bne- unmountMemoryCard
+
+# The Arena Lo value we're using is in r31, so make a copy of it to use for allocating memory
+mr r24,r31
+
+# Allocate 0x200 bytes of memory, as the read size must be in multiples of 0x200 bytes
+li r3,0x200
+bl allocateMemory
+
+# Backup the returned address to be used for later
+mr r25,r3
+
+# Reset Arena Lo, as the 0x200 bytes is only needed temporarily
+mr r24,r31
+
+# Read from the Card
+mr r3,r27 # Pointer to CARDFileInfo
+mr r4,r25 # Pointer to the File Buffer
+li r5,0x200 # Amount of bytes to read
+li r6,0x2000 # Offset in the file to start reading from
+bl (CARDRead - LOADER_LOWMEM_LOCATION + __start)
+cmpwi r3,0 # Check if something went wrong
+li r26,0x200 # Used as the size to clear in freeCurrentMemoryArea
+bne- freeCurrentMemoryArea
+
+# Get the file size and adjust it to be in multiples of 0x200 bytes
+lwz r26,0x40(r25) # File Size
+addi r26,r26,511
+rlwinm r26,r26,0,0,22
+
+# Allocate more bytes based on the adjusted file size
+mr r3,r26
+bl allocateMemory
+
+# Backup the returned address to be used for later
+mr r25,r3
+
+# Read the REL Area of the file
+mr r3,r27 # Pointer to CARDFileInfo
+mr r4,r25 # Pointer to the File Buffer
+mr r5,r26 # Adjusted File Size
+li r6,0x2200 # Offset in the file to start reading from
+bl (CARDRead - LOADER_LOWMEM_LOCATION + __start)
+cmpwi r3,0 # Check if something went wrong
+bne- freeCurrentMemoryArea
+
+# Get the starting address of the BSS Area
+lwz r3,0x48(r25) # fixSize
+add r23,r25,r3 # BSS Area address
+
+# Make sure the address for the BSS Area is properly aligned
+lwz r3,0x44(r25) # bssAlign
+and. r0,r23,r3
+beq+ bssAreaAligned
+
+# Align the BSS Area
+neg r4,r3
+and r4,r23,r4
+add r23,r4,r3
+
+bssAreaAligned:
+# Link the functions in the REL
+mr r3,r25 # Pointer to the Module
+mr r4,r23 # Pointer to the BSS Area
+bl (OSLinkFixed - LOADER_LOWMEM_LOCATION + __start)
+cmpwi r3,1 # Check if something went wrong
+bne- unlinkRelFile
+
+# Clear the memory and cache for the unused relocation data after the BSS Area
+# Also clears the cache for the BSS Area
+mr r3,r23 # Pointer to the BSS Area
+add r4,r25,r26 # Module + Adjusted File Size
+sub r4,r4,r23 # (Module + Adjusted File Size) - BSS Area
+bl clearMemoryAndCache
+
+# Set Arena Lo to the end of the BSS Area
+lwz r3,0x20(r25) # bssSize
+add r3,r23,r3 # End of BSS Area
+mr r31,r3
+
+# Store the combined REL and BSS Area sizes
+sub r0,r3,r25 # End of BSS Area - Module
+stw r0,0x42D8(r28) # REL and BSS Area combined sizes
+
+# Store the BSS Area and the Module
+stw r23,0x42DC(r28) # Pointer to the BSS Area
+stw r25,0x42E0(r28) # Pointer to the Module
+
+# Done, so close and unmount the card
+b closeCard
+
+# Function definitions, error handling, etc.
+allocateMemory:
+# Push stack
+stwu sp,-0x10(sp)
+mflr r0
+stw r0,0x14(sp)
+stmw r30,0x8(sp)
+
+mr r31,r3 # size
+
+# Make sure Arena Lo is in multiples of 0x20 bytes
+addi r24,r24,31
+rlwinm r24,r24,0,0,26
+
+# Allocate the memory
+mr r3,r24
+
+# Update Arena Lo for future allocations
+add r24,r24,r31
+
+clearMemoryAndCacheMain:
+mr r30,r3 # address
+
+# Clear the memory
+# r3 already contains address
+li r4,0
+mr r5,r31 # size
+bl (memset - LOADER_LOWMEM_LOCATION + __start)
+
+# Clear the cache for the memory
+# r3 already contains address
+mr r4,r31 # size
+bl makeCodeChangesVisible
+
+mr r3,r30 # address
+
+# Pop Stack
+lmw r30,0x8(sp)
+lwz r0,0x14(sp)
+mtlr r0
+addi sp,sp,0x10
+blr
+
+clearMemoryAndCache:
+# Very dirty, but works
+stwu sp,-0x10(sp)
+mflr r0
+stw r0,0x14(sp)
+stmw r30,0x8(sp)
+mr r31,r4 # size
+b clearMemoryAndCacheMain
+
+unlinkRelFile:
+mr r3,r25 # Pointer to the Module
+bl (OSUnlink - LOADER_LOWMEM_LOCATION + __start)
+
+freeCurrentMemoryArea:
+# Clear the memory and cache for the Module and BSS Area
+mr r3,r25 # Pointer to the Module
+mr r4,r26 # Adjusted File Size
+bl clearMemoryAndCache
+
+closeCard:
+mr r3,r27 # Pointer to CARDFileInfo
+bl (CARDClose - LOADER_LOWMEM_LOCATION + __start)
+
+unmountMemoryCard:
+li r3,0 # Memory Card Slot A
+bl (CARDUnmount - LOADER_LOWMEM_LOCATION + __start)
+
+exitFirstHook:
+# Restore important register values
+mr r3,r31
+mr r4,r30
+mr r5,r29
+
+# Pop stack
+lmw r23,0x8(sp)
+lwz r0,0x54(sp)
+mtlr r0
+addi sp,sp,0x50
+
+# Restore the overwritten instruction
+mulli r7,r5,12
+
+# Go back to the main function
+b ((PAYLOAD_FIRST_HOOK_LOCATION + 4) - LOADER_LOWMEM_LOCATION + __start)
+
+gPayloadSecondHook:
+# Get the new Archive Heap size
+lis r4,0x8000
+lwz r4,0x42D8(r4) # REL and BSS Area combined sizes
+
+# New size is default minus REL and BSS Area
+# REL and BSS Area size will be 0 if linking failed
+sub r3,r3,r4
+
+# Restore the overwritten instruction
+mr r4,r30
+
+# Go back to the main function
+b ((PAYLOAD_SECOND_HOOK_LOCATION + 4) - LOADER_LOWMEM_LOCATION + __start)
+
+gPayloadThirdHook:
+# Get the new Archive Heap size to print
+lis r6,0x8000
+lwz r6,0x42D8(r6) # REL and BSS Area combined sizes
+
+# Restore the overwritten instruction
+lis r5,0x008E
+
+# New size is default minus REL and BSS Area
+# REL and BSS Area size will be 0 if linking failed
+sub r5,r5,r6
+
+# Go back to the main function
+b ((PAYLOAD_THIRD_HOOK_LOCATION + 4) - LOADER_LOWMEM_LOCATION + __start)
+
+gPayloadFourthHook:
+# Restore the overwritten instruction
+stw r3,g_mDoAud_audioHeap_OFFSET(r13)
+
+# Run the REL Prolog if the REL file was successfully linked
+lis r3,0x8000
+lwz r3,0x42E0(r3) # Pointer to the Module
+cmpwi r3,0
+beq- exitFourthHook
+
+lwz r3,0x34(r3) # REL Prolog Pointer
+mtlr r3
+blrl
+
+exitFourthHook:
+# Go back to the main function
+b ((PAYLOAD_FOURTH_HOOK_LOCATION + 4) - LOADER_LOWMEM_LOCATION + __start)
+
+internalFilenameString:
+.asciz "Custom REL File"
+
+__end:
