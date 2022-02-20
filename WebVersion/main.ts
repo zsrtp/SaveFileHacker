@@ -104,7 +104,7 @@ function patch(view: DataView, versionNumber: number, fileNumber: number): Patch
     }
 
     // Write the new file name (Link's name).
-    const newFileName = 'REL Loader v${versionNumber}\0'
+    const newFileName = `REL Loader v${versionNumber}\0`
     patchFilesBytes(0x1B4, makeStrBytes(newFileName));
 
     // Overwrite the next stage string with a bunch of filler 3s.
