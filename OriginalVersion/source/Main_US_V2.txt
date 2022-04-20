@@ -404,7 +404,7 @@ mr r3,r27 # Pointer to the Module
 bl (OSUnlink - LOADER_LOWMEM_LOCATION + __start)
 
 freeCurrentMemoryArea:
-mr r4,r27 # Pointer to the File Buffer or the 0x200 Bytes Buffer
+mr r4,r27 # Pointer to the File Buffer or the 0x400 Bytes Buffer
 bl freeMemory
 
 closeCard:
