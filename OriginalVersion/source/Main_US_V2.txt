@@ -313,7 +313,9 @@ rlwinm r28,r28,0,0,22
 # Increase the fixed REL size to account for the BSS's alignment requirement
 lwz r26,0x248(r27) # fixSize; 0x200 + 0x48
 lwz r3,0x244(r27) # bssAlign; 0x200 + 0x44
-and. r0,r26,r3
+divwu r0,r26,r3
+mullw r0,r0,r3
+sub. r0,r26,r0
 beq+ fixedRelSizeAligned
 
 # Align the fixed REL size
