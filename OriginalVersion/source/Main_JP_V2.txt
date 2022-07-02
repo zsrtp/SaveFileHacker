@@ -26,11 +26,15 @@
 .set ICInvalidateRange,0x8033DB2C
 
 .set MemCardWorkArea0,0x803DB080
+.set memset,0x80003458
 .set do_alloc,0x802D15C4
 .set do_free,0x802D1C48
 .set do_resize,0x802D1E14
+.set OSDisableInterrupts,0x8033FB90
+.set OSRestoreInterrupts,0x8033FBB8
 .set OSLinkFixed,0x803409D0
 .set OSUnlink,0x80340C44
+.set CARDCheck,0x80358D90
 .set CARDProbeEx,0x80358EE8
 .set CARDMount,0x80359790
 .set CARDUnmount,0x80359874
@@ -260,12 +264,36 @@ exitCheckForMemoryCardLoop:
 cmpwi r3,0 # Check if something went wrong
 bne- exit
 
+# Clear the memory for MemCardWorkArea0
+lis r3,MemCardWorkArea0@h
+ori r3,r3,MemCardWorkArea0@l
+li r4,0
+ori r5,r4,0xA000
+bl (memset - LOADER_LOWMEM_LOCATION + __start)
+
+# Clear the cache for MemCardWorkArea0
+lis r3,MemCardWorkArea0@h
+ori r3,r3,MemCardWorkArea0@l
+li r4,0
+ori r5,r4,0xA000
+bl makeCodeChangesVisible
+
 # Mount the Memory Card
 li r3,0 # Memory Card Slot A
 lis r4,MemCardWorkArea0@h
 ori r4,r4,MemCardWorkArea0@l
 li r5,0 # Detach Callback function (Want to avoid using, so NULL)
 bl (CARDMount - LOADER_LOWMEM_LOCATION + __start)
+cmpwi r3,0 # Ready
+beq+ checkForErrors
+cmpwi r3,-6 # Broken
+beq- checkForErrors
+b exit
+
+checkForErrors:
+# Check for and attempt to repair memory card errors
+li r3,0 # Memory Card Slot A
+bl (CARDCheck - LOADER_LOWMEM_LOCATION + __start)
 cmpwi r3,0 # Check if something went wrong
 bne- exit
 
@@ -287,8 +315,10 @@ bne- freeCardFileInfo
 
 # Allocate 0x400 bytes of memory, as the read size must be in multiples of 0x200 bytes, 
 # and the BSS Area size, the fixed REL size, and the BSS Align are needed later
+
+# Allocate to the back of the heap to avoid possible fragmentation
 li r4,0x400 # Bytes to allocate
-li r5,0x20 # The buffer used by CARDRead must be aligned to 0x20 bytes
+li r5,-0x20 # The buffer used by CARDRead must be aligned to 0x20 bytes
 bl allocateMemory
 
 # Backup the returned address to be used for later
@@ -363,6 +393,12 @@ bl (CARDRead - LOADER_LOWMEM_LOCATION + __start)
 cmpwi r3,0 # Check if something went wrong
 bne- freeCurrentMemoryArea
 
+# Disable interrupts to make sure other REL files do not try to be linked while this one is being linked
+bl (OSDisableInterrupts - LOADER_LOWMEM_LOCATION + __start)
+
+# Backup the returned value to be used for later
+mr r25,r3 # enable
+
 # Get the address of the BSS Area
 add r28,r27,r26
 
@@ -371,7 +407,11 @@ mr r3,r27 # Pointer to the Module
 mr r4,r28 # Pointer to the BSS Area
 bl (OSLinkFixed - LOADER_LOWMEM_LOCATION + __start)
 cmpwi r3,1 # Check if something went wrong
-bne- freeRemainingMemory
+bne- unlinkRel
+
+# Restore interrupts
+mr r3,r25 # enable
+bl (OSRestoreInterrupts - LOADER_LOWMEM_LOCATION + __start)
 
 # Add the BSS Area Size to the adjusted fixed REL size
 add r5,r26,r21
@@ -401,9 +441,13 @@ allocateMemory:
 lwz r3,-0x794C(r13) # archiveHeap pointer
 b (do_alloc - LOADER_LOWMEM_LOCATION + __start)
 
-freeRemainingMemory:
+unlinkRel:
 mr r3,r27 # Pointer to the Module
 bl (OSUnlink - LOADER_LOWMEM_LOCATION + __start)
+
+# Restore interrupts
+mr r3,r25 # enable
+bl (OSRestoreInterrupts - LOADER_LOWMEM_LOCATION + __start)
 
 freeCurrentMemoryArea:
 mr r4,r27 # Pointer to the File Buffer or the 0x400 Bytes Buffer
@@ -417,6 +461,7 @@ freeCardFileInfo:
 mr r4,r29
 bl freeMemory
 
+# Unmount the Memory Card
 li r3,0 # Memory Card Slot A
 bl (CARDUnmount - LOADER_LOWMEM_LOCATION + __start)
 

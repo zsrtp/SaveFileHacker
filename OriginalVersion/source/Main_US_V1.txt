@@ -26,16 +26,20 @@
 .set ICInvalidateRange,0x8033B690
 
 .set MemCardWorkArea0,0x803E0F40
+.set memset,0x80003458
+.set do_alloc,0x802CF128
+.set do_free,0x802CF7AC
+.set OSDisableInterrupts,0x8033D6F4
+.set OSRestoreInterrupts,0x8033D71C
+.set OSLink,0x8033E510
+.set OSUnlink,0x8033E7A8
+.set CARDCheck,0x803568F4
 .set CARDProbeEx,0x80356A4C
 .set CARDMount,0x803572F4
-.set CARDOpen,0x80357F98
-.set CARDRead,0x803588CC
-.set OSLink,0x8033E510
-.set do_free,0x802CF7AC
-.set do_alloc,0x802CF128
-.set OSUnlink,0x8033E7A8
-.set CARDClose,0x803580B4
 .set CARDUnmount,0x803573D8
+.set CARDOpen,0x80357F98
+.set CARDClose,0x803580B4
+.set CARDRead,0x803588CC
 
 __start:
 # Hook __OSReboot
@@ -211,7 +215,7 @@ stmw r29,0x8(sp)
 mr r31,r3 # address
 mr r30,r4 # size
 
-lis r29,0x8033
+lis r29,DCFlushRange@h
 ori r5,r29,DCFlushRange@l
 mtlr r5
 blrl
@@ -259,17 +263,42 @@ exitCheckForMemoryCardLoop:
 cmpwi r3,0 # Check if something went wrong
 bne- exit
 
+# Clear the memory for MemCardWorkArea0
+lis r3,MemCardWorkArea0@h
+ori r3,r3,MemCardWorkArea0@l
+li r4,0
+ori r5,r4,0xA000
+bl (memset - LOADER_LOWMEM_LOCATION + __start)
+
+# Clear the cache for MemCardWorkArea0
+lis r3,MemCardWorkArea0@h
+ori r3,r3,MemCardWorkArea0@l
+li r4,0
+ori r5,r4,0xA000
+bl makeCodeChangesVisible
+
 # Mount the Memory Card
 li r3,0 # Memory Card Slot A
 lis r4,MemCardWorkArea0@h
 ori r4,r4,MemCardWorkArea0@l
 li r5,0 # Detach Callback function (Want to avoid using, so NULL)
 bl (CARDMount - LOADER_LOWMEM_LOCATION + __start)
+cmpwi r3,0 # Ready
+beq+ checkForErrors
+cmpwi r3,-6 # Broken
+beq- checkForErrors
+b exit
+
+checkForErrors:
+# Check for and attempt to repair memory card errors
+li r3,0 # Memory Card Slot A
+bl (CARDCheck - LOADER_LOWMEM_LOCATION + __start)
 cmpwi r3,0 # Check if something went wrong
 bne- exit
 
 # Allocate memory for CardFileInfo
-li r4,20
+li r4,0x14
+li r5,-0x4 # Allocate to the back of the heap to avoid fragmentation
 bl allocateMemory
 
 # Backup the returned address to be used for later
@@ -284,7 +313,9 @@ cmpwi r3,0 # Check if something went wrong
 bne- freeCardFileInfo
 
 # Allocate 0x200 bytes of memory, as the read size must be in multiples of 0x200 bytes
+# Allocate to the back of the heap to avoid possible fragmentation
 li r4,0x200 # Bytes to allocate
+li r5,-0x20 # The buffer used by CARDRead must be aligned to 0x20 bytes
 bl allocateMemory
 
 # Backup the returned address to be used for later
@@ -310,6 +341,7 @@ bl freeMemory
 
 # Allocate more bytes based on the adjusted file size
 mr r4,r28
+li r5,0x20 # REL files require an alignment of 0x20
 bl allocateMemory
 
 # Backup the returned address to be used for later
@@ -325,18 +357,29 @@ cmpwi r3,0 # Check if something went wrong
 bne- freeCurrentMemoryArea
 
 # Get the BSS Area size and allocate memory for it
-lwz r4,0x20(r27)
+lwz r4,0x20(r27) # BSS Area size
+lwz r5,0x44(r27) # bssAlign
 bl allocateMemory
 
 # Backup the returned address to be used for later
 mr r28,r3
+
+# Disable interrupts to make sure other REL files do not try to be linked while this one is being linked
+bl (OSDisableInterrupts - LOADER_LOWMEM_LOCATION + __start)
+
+# Backup the returned value to be used for later
+mr r26,r3 # enable
 
 # Link the functions in the REL
 mr r3,r27 # Pointer to the Module
 mr r4,r28 # Pointer to the BSS Area
 bl (OSLink - LOADER_LOWMEM_LOCATION + __start)
 cmpwi r3,1 # Check if something went wrong
-bne- freeRemainingMemory
+bne- unlinkRel
+
+# Restore interrupts
+mr r3,r26 # enable
+bl (OSRestoreInterrupts - LOADER_LOWMEM_LOCATION + __start)
 
 # Store the BSS Area and the Module
 stw r28,0x42DC(r31) # Pointer to the BSS Area
@@ -350,17 +393,20 @@ b closeCard
 
 # Function definitions, error handling, etc.
 freeMemory:
-lwz r3,-0x794C(r13) # Pointer to the heap to use - archiveHeap
+lwz r3,-0x794C(r13) # archiveHeap pointer
 b (do_free - LOADER_LOWMEM_LOCATION + __start)
 
 allocateMemory:
-lwz r3,-0x794C(r13) # Pointer to the heap to use - archiveHeap
-li r5,0x20 # 0x20 allocates from Head, -0x20 allocates from Tail
+lwz r3,-0x794C(r13) # archiveHeap pointer
 b (do_alloc - LOADER_LOWMEM_LOCATION + __start)
 
-freeRemainingMemory:
+unlinkRel:
 mr r3,r27 # Pointer to the Module
 bl (OSUnlink - LOADER_LOWMEM_LOCATION + __start)
+
+# Restore interrupts
+mr r3,r26 # enable
+bl (OSRestoreInterrupts - LOADER_LOWMEM_LOCATION + __start)
 
 # Free the BSS Area and the File Buffer
 mr r4,r28 # Pointer to the BSS Area
@@ -389,7 +435,7 @@ mtlr r30
 blrl
 
 exit:
-# Add back in the overwritten instruction
+# Restore the overwritten instruction
 lis r3,OVERWRITTEN_INSTRUCTION_VALUE
 
 # Go back to the main function
