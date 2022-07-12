@@ -275,7 +275,7 @@ bl (memset - LOADER_LOWMEM_LOCATION + __start)
 lis r3,MemCardWorkArea0@h
 ori r3,r3,MemCardWorkArea0@l
 li r4,0
-ori r5,r4,0xA000
+ori r4,r4,0xA000
 bl makeCodeChangesVisible
 
 # Mount the Memory Card
