@@ -31,6 +31,7 @@
 .set do_free,0x802D05AC
 .set do_resize,0x802D0778
 .set OSDisableInterrupts,0x8033E4F4
+.set OSEnableInterrupts,0x8033E508
 .set OSRestoreInterrupts,0x8033E51C
 .set OSLinkFixed,0x8033F334
 .set OSUnlink,0x8033F5A8
@@ -43,6 +44,12 @@
 .set CARDRead,0x803596FC
 
 __start:
+# Enable interrupts for safety
+lis r12,OSEnableInterrupts@h
+ori r12,r12,OSEnableInterrupts@l
+mtlr r12
+blrl
+
 # Hook __OSReboot
 lis r3,__OSReboot@h
 ori r3,r3,__OSReboot@l
@@ -238,6 +245,12 @@ gPayload:
 # Original code created by PistonMiner and Zephiles for Paper Mario: The Thousand-Year Door
 # Code ported to Twilight Princess by Zephiles
 
+# Interrupts are required to be enabled for CARD functions to work properly
+bl (OSEnableInterrupts - LOADER_LOWMEM_LOCATION + __start)
+
+# Backup the returned value to be used for later
+mr r24,r3 # enable
+
 # Initialize static values used for addresses
 lis r31,0x8000
 
@@ -396,9 +409,6 @@ bne- freeCurrentMemoryArea
 # Disable interrupts to make sure other REL files do not try to be linked while this one is being linked
 bl (OSDisableInterrupts - LOADER_LOWMEM_LOCATION + __start)
 
-# Backup the returned value to be used for later
-mr r25,r3 # enable
-
 # Get the address of the BSS Area
 add r28,r27,r26
 
@@ -409,9 +419,8 @@ bl (OSLinkFixed - LOADER_LOWMEM_LOCATION + __start)
 cmpwi r3,1 # Check if something went wrong
 bne- unlinkRel
 
-# Restore interrupts
-mr r3,r25 # enable
-bl (OSRestoreInterrupts - LOADER_LOWMEM_LOCATION + __start)
+# Re-enable interrupts
+bl (OSEnableInterrupts - LOADER_LOWMEM_LOCATION + __start)
 
 # Add the BSS Area Size to the adjusted fixed REL size
 add r5,r26,r21
@@ -445,9 +454,8 @@ unlinkRel:
 mr r3,r27 # Pointer to the Module
 bl (OSUnlink - LOADER_LOWMEM_LOCATION + __start)
 
-# Restore interrupts
-mr r3,r25 # enable
-bl (OSRestoreInterrupts - LOADER_LOWMEM_LOCATION + __start)
+# Re-enable interrupts
+bl (OSEnableInterrupts - LOADER_LOWMEM_LOCATION + __start)
 
 freeCurrentMemoryArea:
 mr r4,r27 # Pointer to the File Buffer or the 0x400 Bytes Buffer
@@ -472,6 +480,10 @@ mtlr r30
 blrl
 
 exit:
+# Restore interrupts
+mr r3,r24 # enable
+bl (OSRestoreInterrupts - LOADER_LOWMEM_LOCATION + __start)
+
 # Restore the overwritten instruction
 lis r3,OVERWRITTEN_INSTRUCTION_VALUE
 
